@@ -1,0 +1,26 @@
+id: home-assistant
+name: Home & Ops Assistant
+description: Handles interactive home automation sessions and external webhook workflow triggers.
+
+llm:
+  endpoint: https://api.openai.com/v1
+  model: gpt-4o-mini
+  token_key: OPENAI_API_KEY
+  temperature: 0.2
+
+mcp_servers:
+  - name: home_control
+    url: http://localhost:8090/mcp
+    transport: http
+    token_key: HOME_MCP_TOKEN
+  - name: metrics_reader
+    url: http://localhost:8091/sse
+    transport: sse
+    token_key: METRICS_MCP_TOKEN
+
+workflows:
+  - name: alert-triage
+    description: Triages incoming monitoring or home sensor alerts from external servers
+    prompt_template: |
+      Analyze the incoming alert payload, check relevant device states using MCP tools if available, and provide a concise root-cause summary and recommended action.
+
