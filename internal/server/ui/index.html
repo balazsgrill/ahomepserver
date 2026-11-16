@@ -468,9 +468,12 @@
       const items = data.sessions || [];
       list.innerHTML = items.map(s => `
         <div class="session-item ${s.id === currentSessionId ? 'active' : ''}" onclick="selectSession('${s.id}')">
-          <div>
-            <div style="font-weight:600;">${escapeHtml(s.title || s.id.slice(0,8))}</div>
-            <div style="font-size:0.75rem;color:var(--muted);">${s.persona_id}</div>
+          <div style="width:100%;">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:0.4rem;">
+              <div style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(s.title || s.id.slice(0,8))}</div>
+              <span class="badge" style="font-size:0.7rem;">${escapeHtml(s.persona_id)}</span>
+            </div>
+            <div style="font-size:0.73rem;color:var(--muted);margin-top:0.2rem;">${formatDateTime(s.updated_at || s.created_at)}</div>
           </div>
         </div>
       `).join('');
@@ -507,14 +510,15 @@
         return;
       }
       box.innerHTML = messages.map(m => {
+        const tsHtml = m.created_at ? `<div style="font-size:0.7rem;opacity:0.7;margin-bottom:0.25rem;">${formatDateTime(m.created_at)}</div>` : '';
         if (m.role === 'tool') {
-          return `<div class="msg tool">Tool Result (${m.tool_call_id}):\n${escapeHtml(m.content)}</div>`;
+          return `<div class="msg tool">${tsHtml}Tool Result (${m.tool_call_id}):\n${escapeHtml(m.content)}</div>`;
         }
         let tcInfo = '';
         if (m.tool_calls && m.tool_calls.length) {
           tcInfo = m.tool_calls.map(tc => `<div>⚡ Tool Call: <b>${escapeHtml(tc.function.name)}</b>(${escapeHtml(tc.function.arguments)})</div>`).join('');
         }
-        return `<div class="msg ${m.role}">${tcInfo}${escapeHtml(m.content || '')}</div>`;
+        return `<div class="msg ${m.role}">${tsHtml}${tcInfo}${escapeHtml(m.content || '')}</div>`;
       }).join('');
       box.scrollTop = box.scrollHeight;
     }
@@ -528,7 +532,8 @@
       }
       input.value = '';
       const box = document.getElementById('chatMessages');
-      box.innerHTML += `<div class="msg user">${escapeHtml(content)}</div>`;
+      const nowIso = new Date().toISOString();
+      box.innerHTML += `<div class="msg user"><div style="font-size:0.7rem;opacity:0.7;margin-bottom:0.25rem;">${formatDateTime(nowIso)}</div>${escapeHtml(content)}</div>`;
       box.scrollTop = box.scrollHeight;
 
       const statusEl = document.getElementById('chatStatus');
@@ -612,13 +617,20 @@
       }
       container.innerHTML = runs.map(r => {
         const badgeClass = r.status === 'completed' ? 'ok' : (r.status === 'failed' ? 'err' : 'warn');
-        const stepsHtml = (r.steps || []).map(st => `<div style="font-size:0.78rem;color:var(--muted);">[${st.type}] <b>${escapeHtml(st.name || '')}</b> ${escapeHtml(st.output || st.input || '')}</div>`).join('');
+        const execTime = formatDateTime(r.started_at || r.created_at);
+        const dur = formatDuration(r.started_at || r.created_at, r.completed_at);
+        const durBadge = dur ? ` <span class="badge">${dur}</span>` : '';
+        const stepsHtml = (r.steps || []).map(st => {
+          const stTime = st.timestamp ? `<span style="opacity:0.7;">${formatTimeOnly(st.timestamp)}</span> ` : '';
+          return `<div style="font-size:0.78rem;color:var(--muted);">${stTime}[${st.type}] <b>${escapeHtml(st.name || '')}</b> ${escapeHtml(st.output || st.input || '')}</div>`;
+        }).join('');
         return `
           <div class="card">
             <div style="display:flex;justify-content:space-between;align-items:center;">
-              <div><b>${escapeHtml(r.workflow_name || 'workflow')}</b> <span class="badge">${r.persona_id}</span></div>
-              <span class="badge ${badgeClass}">${r.status}</span>
+              <div><b>${escapeHtml(r.workflow_name || 'workflow')}</b> <span class="badge">${escapeHtml(r.persona_id)}</span>${durBadge}</div>
+              <span class="badge ${badgeClass}">${escapeHtml(r.status)}</span>
             </div>
+            <div style="font-size:0.76rem;color:var(--muted);">Executed: ${execTime}${r.completed_at ? ` → ${formatTimeOnly(r.completed_at)}` : ''}</div>
             <div style="font-size:0.82rem;color:var(--muted);">Prompt: ${escapeHtml(r.prompt)}</div>
             ${stepsHtml ? `<div><label>Execution Steps</label>${stepsHtml}</div>` : ''}
             ${r.output ? `<div><label>Output</label><pre>${escapeHtml(r.output)}</pre></div>` : ''}
@@ -626,6 +638,39 @@
           </div>
         `;
       }).join('');
+    }
+
+    function formatDateTime(iso) {
+      if (!iso) return '';
+      const d = new Date(iso);
+      if (isNaN(d.getTime())) return String(iso);
+      return d.toLocaleString(undefined, {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+      });
+    }
+
+    function formatTimeOnly(iso) {
+      if (!iso) return '';
+      const d = new Date(iso);
+      if (isNaN(d.getTime())) return '';
+      return d.toLocaleTimeString(undefined, {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+      });
+    }
+
+    function formatDuration(startIso, endIso) {
+      if (!startIso || !endIso) return '';
+      const ms = new Date(endIso).getTime() - new Date(startIso).getTime();
+      if (isNaN(ms) || ms < 0) return '';
+      if (ms < 1000) return `${ms}ms`;
+      return `${(ms / 1000).toFixed(1)}s`;
     }
 
     function escapeHtml(s) {
