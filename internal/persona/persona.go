@@ -31,6 +31,29 @@ type MCPServerConfig struct {
 	Transport string            `yaml:"transport,omitempty" json:"transport,omitempty"` // "http" (default) or "sse"
 	TokenKey  string            `yaml:"token_key,omitempty" json:"token_key,omitempty"`
 	Headers   map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
+	Tools     []string          `yaml:"tools,omitempty" json:"tools,omitempty"`
+}
+
+// AllowsTool returns true if the MCPServerConfig has no tool filter or if toolName matches an entry (exact or prefix*).
+func (m MCPServerConfig) AllowsTool(toolName string) bool {
+	if len(m.Tools) == 0 {
+		return true
+	}
+	for _, pattern := range m.Tools {
+		pattern = strings.TrimSpace(pattern)
+		if pattern == "" || pattern == "*" {
+			return true
+		}
+		if strings.HasSuffix(pattern, "*") {
+			prefix := strings.TrimSuffix(pattern, "*")
+			if strings.HasPrefix(toolName, prefix) {
+				return true
+			}
+		} else if strings.EqualFold(pattern, toolName) {
+			return true
+		}
+	}
+	return false
 }
 
 // WorkflowTemplate defines an optional named workflow template on a persona.

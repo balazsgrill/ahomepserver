@@ -145,10 +145,19 @@ func (r *Runner) RunTurn(
 			continue
 		}
 		for _, t := range srvTools {
+			if !srvCfg.AllowsTool(t.Name) {
+				continue
+			}
 			qName := t.QualifiedName()
 			mcpBindings[qName] = mcpBinding{
 				client:   client,
 				toolName: t.Name,
+			}
+			if _, exists := mcpBindings[t.Name]; !exists {
+				mcpBindings[t.Name] = mcpBinding{
+					client:   client,
+					toolName: t.Name,
+				}
 			}
 			tools = append(tools, openAITool{
 				Type: "function",

@@ -281,6 +281,7 @@ func (c *Client) callSSE(ctx context.Context, method string, params interface{})
 	}
 
 	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
 	var eventType string
 	var postEndpoint string
 	id := c.reqID.Add(1)
@@ -377,6 +378,7 @@ func (c *Client) applyHeaders(req *http.Request) {
 
 func readResponseFromSSE(r io.Reader, expectedID int64) (json.RawMessage, error) {
 	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if !strings.HasPrefix(line, "data:") {
