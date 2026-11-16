@@ -61,6 +61,39 @@ func TestEndUserSessionAndWorkflowIntegration(t *testing.T) {
 					},
 				},
 			})
+		case "prompts/list":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"jsonrpc": "2.0",
+				"id":      req.ID,
+				"result": map[string]interface{}{
+					"prompts": []map[string]interface{}{
+						{
+							"name":        "core_memories",
+							"description": "Retrieve all active pinned core memories",
+							"arguments": []map[string]interface{}{
+								{"name": "bucket", "required": false},
+							},
+						},
+					},
+				},
+			})
+		case "prompts/get":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"jsonrpc": "2.0",
+				"id":      req.ID,
+				"result": map[string]interface{}{
+					"description": "Active pinned core memories",
+					"messages": []map[string]interface{}{
+						{
+							"role": "user",
+							"content": map[string]string{
+								"type": "text",
+								"text": "### Core Memory Facts\n- **[homelab] Thermostat**: Target temperature is 21.5 C",
+							},
+						},
+					},
+				},
+			})
 		default:
 			w.WriteHeader(http.StatusOK)
 		}
@@ -80,6 +113,11 @@ func TestEndUserSessionAndWorkflowIntegration(t *testing.T) {
 			} `json:"messages"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&req)
+
+		if len(req.Messages) == 0 || req.Messages[0].Role != "system" || !strings.Contains(req.Messages[0].Content, "### Core Memory Facts") {
+			http.Error(w, "missing hydrated core_memories in system prompt", http.StatusBadRequest)
+			return
+		}
 
 		hasToolResult := false
 		for _, m := range req.Messages {

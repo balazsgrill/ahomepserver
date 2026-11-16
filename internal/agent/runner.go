@@ -111,9 +111,18 @@ func (r *Runner) RunTurn(
 		}
 	}
 
-	// 1. Discover MCP tools from all configured MCP servers for this persona
+	// 1. Discover MCP tools and hydrate MCP prompts from all configured MCP servers for this persona
 	var tools []openAITool
+	var hydratedPrompts []string
 	mcpBindings := make(map[string]mcpBinding)
+
+	var latestUserQuery string
+	for i := len(history) - 1; i >= 0; i-- {
+		if history[i].Role == "user" && strings.TrimSpace(history[i].Content) != "" {
+			latestUserQuery = strings.TrimSpace(history[i].Content)
+			break
+		}
+	}
 
 	if len(p.Skills) > 0 {
 		tools = append(tools, openAITool{
@@ -168,13 +177,47 @@ func (r *Runner) RunTurn(
 				},
 			})
 		}
+
+		// Discover and retrieve prompts from the MCP server (e.g. core_memories)
+		srvPrompts, pErr := client.ListPrompts(ctx)
+		if pErr != nil {
+			slog.Warn("failed to list prompts from MCP server", "persona", p.ID, "mcp_server", srvCfg.Name, "err", pErr)
+		} else {
+			for _, pr := range srvPrompts {
+				if !srvCfg.AllowsPrompt(pr.Name) {
+					continue
+				}
+				args, ok := resolvePromptArgs(pr, srvCfg.PromptArgs, latestUserQuery)
+				if !ok {
+					continue
+				}
+				emit(Event{
+					Type:    "status",
+					Name:    pr.Name,
+					Content: fmt.Sprintf("Hydrating prompt %s from %s...", pr.Name, srvCfg.Name),
+				})
+				promptText, getErr := client.GetPrompt(ctx, pr.Name, args)
+				if getErr != nil {
+					slog.Warn("failed to get prompt from MCP server", "persona", p.ID, "mcp_server", srvCfg.Name, "prompt", pr.Name, "err", getErr)
+					continue
+				}
+				if strings.TrimSpace(promptText) != "" {
+					hydratedPrompts = append(hydratedPrompts, fmt.Sprintf("## MCP Prompt [%s / %s]\n%s", srvCfg.Name, pr.Name, strings.TrimSpace(promptText)))
+				}
+			}
+		}
 	}
 
-	// 2. Build OpenAI messages starting with persona's system prompt
+	// 2. Build OpenAI messages starting with persona's system prompt + hydrated MCP prompts
+	sysPrompt := p.SystemPrompt()
+	if len(hydratedPrompts) > 0 {
+		sysPrompt = strings.TrimSpace(sysPrompt) + "\n\n# Hydrated Context\n\n" + strings.Join(hydratedPrompts, "\n\n")
+	}
+
 	oaMessages := make([]openAIMessage, 0, len(history)+4)
 	oaMessages = append(oaMessages, openAIMessage{
 		Role:    "system",
-		Content: p.SystemPrompt(),
+		Content: sysPrompt,
 	})
 	for _, m := range history {
 		if m.Role == "system" {
@@ -369,4 +412,33 @@ func (r *Runner) callLLM(
 		ToolCalls: msg.ToolCalls,
 	}, nil
 }
+
+func resolvePromptArgs(
+	pr mcp.Prompt,
+	configured map[string]map[string]string,
+	latestUserQuery string,
+) (map[string]string, bool) {
+	args := make(map[string]string)
+	if configured != nil {
+		if preset, ok := configured[pr.Name]; ok {
+			for k, v := range preset {
+				args[k] = v
+			}
+		}
+	}
+	for _, argDef := range pr.Arguments {
+		if _, exists := args[argDef.Name]; exists {
+			continue
+		}
+		if strings.EqualFold(argDef.Name, "query") && latestUserQuery != "" {
+			args[argDef.Name] = latestUserQuery
+			continue
+		}
+		if argDef.Required {
+			return nil, false
+		}
+	}
+	return args, true
+}
+
 

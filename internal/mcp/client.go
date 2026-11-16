@@ -23,6 +23,31 @@ type Tool struct {
 	InputSchema json.RawMessage `json:"inputSchema"`
 }
 
+// PromptArgument describes an argument accepted by an MCP prompt.
+type PromptArgument struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Required    bool   `json:"required,omitempty"`
+}
+
+// Prompt represents a prompt exposed by an MCP server via prompts/list.
+type Prompt struct {
+	ServerName  string           `json:"server_name"`
+	Name        string           `json:"name"`
+	Description string           `json:"description,omitempty"`
+	Arguments   []PromptArgument `json:"arguments,omitempty"`
+}
+
+// HasRequiredArgs returns true if any argument on the prompt is marked required.
+func (p Prompt) HasRequiredArgs() bool {
+	for _, arg := range p.Arguments {
+		if arg.Required {
+			return true
+		}
+	}
+	return false
+}
+
 // QualifiedName returns a collision-free tool name "<server>__<tool>".
 func (t Tool) QualifiedName() string {
 	return fmt.Sprintf("%s__%s", sanitizeName(t.ServerName), t.Name)
@@ -192,6 +217,117 @@ func (c *Client) CallTool(ctx context.Context, toolName string, arguments map[st
 	}
 
 	return string(res), nil
+}
+
+// ListPrompts queries prompts/list on the MCP server.
+// If the server does not implement prompts/list (JSON-RPC -32601), it returns nil, nil.
+func (c *Client) ListPrompts(ctx context.Context) ([]Prompt, error) {
+	if err := c.Initialize(ctx); err != nil {
+		return nil, err
+	}
+
+	res, err := c.call(ctx, "prompts/list", map[string]interface{}{})
+	if err != nil {
+		if strings.Contains(err.Error(), "-32601") || strings.Contains(strings.ToLower(err.Error()), "method not found") {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("mcp prompts/list (%s): %w", c.name, err)
+	}
+
+	var parsed struct {
+		Prompts []struct {
+			Name        string           `json:"name"`
+			Description string           `json:"description"`
+			Arguments   []PromptArgument `json:"arguments"`
+		} `json:"prompts"`
+	}
+	if err := json.Unmarshal(res, &parsed); err != nil {
+		return nil, fmt.Errorf("decoding prompts/list from %s: %w", c.name, err)
+	}
+
+	prompts := make([]Prompt, 0, len(parsed.Prompts))
+	for _, p := range parsed.Prompts {
+		prompts = append(prompts, Prompt{
+			ServerName:  c.name,
+			Name:        p.Name,
+			Description: p.Description,
+			Arguments:   p.Arguments,
+		})
+	}
+	return prompts, nil
+}
+
+// GetPrompt invokes prompts/get on the MCP server and returns the concatenated prompt text.
+func (c *Client) GetPrompt(ctx context.Context, promptName string, arguments map[string]string) (string, error) {
+	if err := c.Initialize(ctx); err != nil {
+		return "", err
+	}
+	params := map[string]interface{}{
+		"name": promptName,
+	}
+	if len(arguments) > 0 {
+		params["arguments"] = arguments
+	}
+
+	res, err := c.call(ctx, "prompts/get", params)
+	if err != nil {
+		return "", fmt.Errorf("mcp prompts/get %s on %s: %w", promptName, c.name, err)
+	}
+
+	var promptResult struct {
+		Description string `json:"description"`
+		Messages    []struct {
+			Role    string          `json:"role"`
+			Content json.RawMessage `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(res, &promptResult); err != nil {
+		return "", fmt.Errorf("decoding prompts/get %s from %s: %w", promptName, c.name, err)
+	}
+
+	var parts []string
+	for _, m := range promptResult.Messages {
+		text := extractPromptMessageText(m.Content)
+		if strings.TrimSpace(text) != "" {
+			parts = append(parts, strings.TrimSpace(text))
+		}
+	}
+	return strings.Join(parts, "\n\n"), nil
+}
+
+func extractPromptMessageText(raw json.RawMessage) string {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" {
+		return ""
+	}
+	// Case 1: single content object {"type": "text", "text": "..."}
+	var single struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(raw, &single); err == nil && single.Text != "" {
+		return single.Text
+	}
+	// Case 2: array of content objects [{"type": "text", "text": "..."}]
+	var list []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(raw, &list); err == nil && len(list) > 0 {
+		var items []string
+		for _, item := range list {
+			if item.Text != "" {
+				items = append(items, item.Text)
+			}
+		}
+		return strings.Join(items, "\n")
+	}
+	// Case 3: plain JSON string
+	var plain string
+	if err := json.Unmarshal(raw, &plain); err == nil {
+		return plain
+	}
+	return ""
 }
 
 func (c *Client) call(ctx context.Context, method string, params interface{}) (json.RawMessage, error) {

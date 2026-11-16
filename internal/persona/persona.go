@@ -26,30 +26,41 @@ type LLMConfig struct {
 
 // MCPServerConfig defines an external MCP server endpoint for a persona.
 type MCPServerConfig struct {
-	Name      string            `yaml:"name" json:"name"`
-	URL       string            `yaml:"url" json:"url"`
-	Transport string            `yaml:"transport,omitempty" json:"transport,omitempty"` // "http" (default) or "sse"
-	TokenKey  string            `yaml:"token_key,omitempty" json:"token_key,omitempty"`
-	Headers   map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
-	Tools     []string          `yaml:"tools,omitempty" json:"tools,omitempty"`
+	Name       string                       `yaml:"name" json:"name"`
+	URL        string                       `yaml:"url" json:"url"`
+	Transport  string                       `yaml:"transport,omitempty" json:"transport,omitempty"` // "http" (default) or "sse"
+	TokenKey   string                       `yaml:"token_key,omitempty" json:"token_key,omitempty"`
+	Headers    map[string]string            `yaml:"headers,omitempty" json:"headers,omitempty"`
+	Tools      []string                     `yaml:"tools,omitempty" json:"tools,omitempty"`
+	Prompts    []string                     `yaml:"prompts,omitempty" json:"prompts,omitempty"`
+	PromptArgs map[string]map[string]string `yaml:"prompt_args,omitempty" json:"prompt_args,omitempty"`
 }
 
 // AllowsTool returns true if the MCPServerConfig has no tool filter or if toolName matches an entry (exact or prefix*).
 func (m MCPServerConfig) AllowsTool(toolName string) bool {
-	if len(m.Tools) == 0 {
+	return matchesFilterList(m.Tools, toolName)
+}
+
+// AllowsPrompt returns true if the MCPServerConfig has no prompt filter or if promptName matches an entry (exact or prefix*).
+func (m MCPServerConfig) AllowsPrompt(promptName string) bool {
+	return matchesFilterList(m.Prompts, promptName)
+}
+
+func matchesFilterList(patterns []string, name string) bool {
+	if len(patterns) == 0 {
 		return true
 	}
-	for _, pattern := range m.Tools {
+	for _, pattern := range patterns {
 		pattern = strings.TrimSpace(pattern)
 		if pattern == "" || pattern == "*" {
 			return true
 		}
 		if strings.HasSuffix(pattern, "*") {
 			prefix := strings.TrimSuffix(pattern, "*")
-			if strings.HasPrefix(toolName, prefix) {
+			if strings.HasPrefix(name, prefix) {
 				return true
 			}
-		} else if strings.EqualFold(pattern, toolName) {
+		} else if strings.EqualFold(pattern, name) {
 			return true
 		}
 	}
