@@ -93,6 +93,8 @@ func (tr *TokenResolver) Reload() {
 }
 
 // Resolve looks up a token key in the tokens file, then AHP_TOKEN_<KEY> env var, then <KEY> env var.
+// If not found in the environment or tokens file, and tokenKey is a literal token (contains lowercase
+// characters or dashes rather than an UPPER_SNAKE_CASE env var identifier), it returns tokenKey directly.
 func (tr *TokenResolver) Resolve(tokenKey string) string {
 	tokenKey = strings.TrimSpace(tokenKey)
 	if tokenKey == "" {
@@ -108,7 +110,34 @@ func (tr *TokenResolver) Resolve(tokenKey string) string {
 	if val := os.Getenv("AHP_TOKEN_" + tokenKey); val != "" {
 		return val
 	}
-	return os.Getenv(tokenKey)
+	if val := os.Getenv(tokenKey); val != "" {
+		return val
+	}
+	if !isEnvVarIdentifier(tokenKey) {
+		return tokenKey
+	}
+	return ""
+}
+
+// DisplayKey returns tokenKey as-is if it is an env var identifier, or a masked preview if it is a literal token.
+func DisplayKey(tokenKey string) string {
+	tokenKey = strings.TrimSpace(tokenKey)
+	if tokenKey == "" || isEnvVarIdentifier(tokenKey) {
+		return tokenKey
+	}
+	if len(tokenKey) <= 10 {
+		return "***"
+	}
+	return tokenKey[:7] + "..." + tokenKey[len(tokenKey)-4:]
+}
+
+func isEnvVarIdentifier(s string) bool {
+	for _, r := range s {
+		if !((r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_') {
+			return false
+		}
+	}
+	return true
 }
 
 func getEnv(key, fallback string) string {

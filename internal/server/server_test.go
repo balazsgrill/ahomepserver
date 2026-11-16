@@ -213,3 +213,74 @@ func TestEndUserSessionAndWorkflowIntegration(t *testing.T) {
 	}
 }
 
+func TestUIWithAPIKeyAndLiteralTokenKey(t *testing.T) {
+	tmpDir := t.TempDir()
+	personasDir := filepath.Join(tmpDir, "personas")
+	pDir := filepath.Join(personasDir, "docmanager")
+	_ = os.MkdirAll(pDir, 0o755)
+	cfgContent := "id: docmanager\nname: Document Manager\nllm:\n  endpoint: http://llm.internal/v1\n  model: openrouter/openrouter/auto\n  token_key: sk_gom_1234567890abcdef\n"
+	_ = os.WriteFile(filepath.Join(pDir, "config.yaml"), []byte(cfgContent), 0o644)
+	_ = os.WriteFile(filepath.Join(pDir, "prompt.md"), []byte("You are DocManager."), 0o644)
+
+	cfg := &config.Config{
+		ListenAddr:   ":0",
+		DatabaseURL:  "memory://",
+		PersonasDir:  personasDir,
+		ScanInterval: time.Minute,
+		APIKey:       "super-secret-api-key",
+		MaxAgentTurn: 5,
+	}
+	tokens := config.NewTokenResolver("")
+	pMgr := persona.NewManager(personasDir, 0, nil)
+	if _, err := pMgr.Scan(); err != nil {
+		t.Fatalf("Scan failed: %v", err)
+	}
+	srv := New(cfg, tokens, pMgr, store.NewMemoryStore(), agent.NewRunner(tokens, 5))
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	// External request without API key or UI headers should be rejected with 401
+	resp, err := http.Get(ts.URL + "/api/v1/personas")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for unauthenticated external request, got %d", resp.StatusCode)
+	}
+
+	// Browser UI request with X-AHP-UI header should succeed even when APIKey is configured
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/personas", nil)
+	req.Header.Set("X-AHP-UI", "1")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for UI request, got %d", resp.StatusCode)
+	}
+	var payload struct {
+		Personas []struct {
+			ID               string `json:"id"`
+			LLMTokenResolved bool   `json:"llm_token_resolved"`
+			LLM              struct {
+				TokenKey string `json:"token_key"`
+			} `json:"llm"`
+		} `json:"personas"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Personas) != 1 || payload.Personas[0].ID != "docmanager" {
+		t.Fatalf("expected docmanager persona, got %+v", payload.Personas)
+	}
+	if !payload.Personas[0].LLMTokenResolved {
+		t.Errorf("expected llm_token_resolved=true for literal token_key")
+	}
+	if payload.Personas[0].LLM.TokenKey == "sk_gom_1234567890abcdef" {
+		t.Errorf("expected literal token_key to be masked in API response, got %s", payload.Personas[0].LLM.TokenKey)
+	}
+}
+
+

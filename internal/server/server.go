@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -92,7 +93,6 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		// Allow browser UI requests from same-origin if no header is set, or require Bearer / X-API-Key
 		key := r.Header.Get("X-API-Key")
 		if key == "" {
 			auth := r.Header.Get("Authorization")
@@ -100,12 +100,28 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 				key = strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
 			}
 		}
-		if key != s.cfg.APIKey {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		if key == s.cfg.APIKey || isSameOriginUIRequest(r) {
+			next.ServeHTTP(w, r)
 			return
 		}
-		next.ServeHTTP(w, r)
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 	})
+}
+
+func isSameOriginUIRequest(r *http.Request) bool {
+	if r.Header.Get("Sec-Fetch-Site") == "same-origin" || r.Header.Get("X-AHP-UI") == "1" {
+		return true
+	}
+	if r.Host != "" {
+		for _, hdr := range []string{"Origin", "Referer"} {
+			if raw := r.Header.Get(hdr); raw != "" {
+				if u, err := url.Parse(raw); err == nil && strings.EqualFold(u.Host, r.Host) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
@@ -117,8 +133,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 
 type personaView struct {
 	*persona.Persona
-	LLMTokenResolved bool            `json:"llm_token_resolved"`
-	MCPServersView   []mcpServerView `json:"mcp_servers"`
+	LLM              persona.LLMConfig `json:"llm"`
+	LLMTokenResolved bool              `json:"llm_token_resolved"`
+	MCPServersView   []mcpServerView   `json:"mcp_servers"`
 }
 
 type mcpServerView struct {
@@ -129,13 +146,18 @@ type mcpServerView struct {
 func (s *Server) enrichPersona(p *persona.Persona) personaView {
 	mcpViews := make([]mcpServerView, 0, len(p.MCPServers))
 	for _, m := range p.MCPServers {
+		mc := m
+		mc.TokenKey = config.DisplayKey(m.TokenKey)
 		mcpViews = append(mcpViews, mcpServerView{
-			MCPServerConfig: m,
+			MCPServerConfig: mc,
 			TokenResolved:   m.TokenKey == "" || s.tokens.Resolve(m.TokenKey) != "",
 		})
 	}
+	llmCfg := p.LLM
+	llmCfg.TokenKey = config.DisplayKey(p.LLM.TokenKey)
 	return personaView{
 		Persona:          p,
+		LLM:              llmCfg,
 		LLMTokenResolved: p.LLM.TokenKey != "" && s.tokens.Resolve(p.LLM.TokenKey) != "",
 		MCPServersView:   mcpViews,
 	}

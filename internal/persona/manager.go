@@ -272,6 +272,8 @@ func (m *Manager) syncInMemoryGit() (billy.Filesystem, string, string, error) {
 				if opts.Branch != "" {
 					pullOpts.ReferenceName = plumbing.NewBranchReferenceName(opts.Branch)
 					pullOpts.SingleBranch = true
+				} else if head, headErr := repo.Head(); headErr == nil && head.Name().IsBranch() {
+					pullOpts.ReferenceName = head.Name()
 				}
 				pullErr := wt.Pull(pullOpts)
 				if pullErr != nil && !errors.Is(pullErr, git.NoErrAlreadyUpToDate) {
