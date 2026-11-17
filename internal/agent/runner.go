@@ -24,8 +24,9 @@ type Event struct {
 	Name      string    `json:"name,omitempty"`
 	Input     string    `json:"input,omitempty"`
 	Output    string    `json:"output,omitempty"`
-	Content   string    `json:"content,omitempty"`
-	Timestamp time.Time `json:"timestamp"`
+	Content    string    `json:"content,omitempty"`
+	ToolCallID string    `json:"tool_call_id,omitempty"`
+	Timestamp  time.Time `json:"timestamp"`
 }
 
 // EventCallback is invoked whenever the agent loop emits an Event.

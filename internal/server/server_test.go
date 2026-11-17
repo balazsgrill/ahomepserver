@@ -287,9 +287,9 @@ func TestUIWithAPIKeyAndLiteralTokenKey(t *testing.T) {
 		t.Fatalf("expected 401 for unauthenticated external request, got %d", resp.StatusCode)
 	}
 
-	// Browser UI request with X-AHP-UI header should succeed even when APIKey is configured
+	// Authenticated request with API key should succeed
 	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/personas", nil)
-	req.Header.Set("X-AHP-UI", "1")
+	req.Header.Set("X-API-Key", "super-secret-api-key")
 	resp, err = http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)

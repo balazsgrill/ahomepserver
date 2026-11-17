@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AHP Server — Agent Home Protocol</title>
+  <title>AHP Server — Agent Host Protocol</title>
   <style>
     :root {
       --bg: #0f172a;
@@ -104,7 +104,7 @@
     }
     /* Sessions layout */
     .sidebar {
-      width: 300px;
+      width: 320px;
       background: var(--panel);
       border-right: 1px solid var(--border);
       display: flex;
@@ -150,7 +150,7 @@
       background: rgba(51, 65, 85, 0.5);
       border-left: 3px solid var(--accent);
       font-family: monospace;
-      font-size: 0.8rem;
+      font-size: 0.82rem;
       color: var(--muted);
       max-width: 90%;
     }
@@ -215,7 +215,7 @@
     }
     .split-view {
       display: grid;
-      grid-template-columns: 400px 1fr;
+      grid-template-columns: 420px 1fr;
       width: 100%;
       height: 100%;
       overflow: hidden;
@@ -240,16 +240,18 @@
 <body>
   <header>
     <div class="brand">
-      <span>AHP Server</span>
-      <span id="scanBadge" class="badge">Loading...</span>
+      <span>Agent Host Protocol</span>
+      <span id="wsStatusBadge" class="badge warn">Connecting...</span>
+      <span id="versionBadge" class="badge ok">AHP 1.1.0</span>
+      <span id="seqBadge" class="badge">seq: 0</span>
     </div>
     <nav>
-      <button class="tab-btn active" onclick="switchTab('sessions', this)">End-User Sessions</button>
-      <button class="tab-btn" onclick="switchTab('workflows', this)">Automated Workflows</button>
-      <button class="tab-btn" onclick="switchTab('personas', this)">Personas (<span id="personaCount">0</span>)</button>
+      <button class="tab-btn active" onclick="switchTab('sessions', this)">Sessions</button>
+      <button class="tab-btn" onclick="switchTab('automations', this)">Automations</button>
+      <button class="tab-btn" onclick="switchTab('agents', this)">Agents (<span id="agentCount">0</span>)</button>
     </nav>
-    <div>
-      <button class="btn secondary" onclick="reloadPersonas()">Rescan Folder</button>
+    <div style="display:flex;gap:0.5rem;align-items:center;">
+      <button class="btn secondary" onclick="reloadPersonas()">Rescan Personas</button>
     </div>
   </header>
 
@@ -258,386 +260,647 @@
     <section id="view-sessions" class="view active">
       <div class="sidebar">
         <div>
-          <label>Persona</label>
+          <label>Agent / Persona</label>
           <select id="sessionPersonaSelect"></select>
         </div>
         <div>
           <label>Session Title (optional)</label>
           <input id="sessionTitleInput" placeholder="New conversation..." />
         </div>
-        <button class="btn" onclick="createNewSession()">+ New Session</button>
+        <button class="btn" onclick="createNewSession()">+ New AHP Session</button>
         <hr style="border-color: var(--border); width: 100%;" />
-        <label>Recent Sessions</label>
+        <label>Active Sessions</label>
         <div id="sessionList" style="display:flex;flex-direction:column;gap:0.4rem;"></div>
       </div>
       <div class="chat-container">
+        <div style="padding:0.75rem 1.25rem;background:var(--panel);border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;">
+          <div>
+            <span id="activeSessionTitle" style="font-weight:700;">No session selected</span>
+            <span id="activeSessionUri" style="font-size:0.75rem;color:var(--muted);margin-left:0.5rem;"></span>
+          </div>
+          <div>
+            <span id="activeSessionStatus" class="badge">idle</span>
+            <button id="disposeSessionBtn" class="btn secondary" style="display:none;padding:0.25rem 0.55rem;font-size:0.75rem;margin-left:0.5rem;" onclick="disposeCurrentSession()">Dispose</button>
+          </div>
+        </div>
         <div id="chatMessages" class="messages">
-          <div style="color:var(--muted);margin:auto;">Select or create a session to begin chatting with an agent persona.</div>
+          <div style="color:var(--muted);margin:auto;">Select or create a session to begin chatting over standard AHP WebSocket.</div>
         </div>
         <div id="chatStatus" style="padding:0 1.25rem;font-size:0.8rem;color:var(--accent);min-height:1.2rem;"></div>
         <div class="composer">
-          <input id="chatInput" placeholder="Send a message..." onkeydown="if(event.key==='Enter') sendMessage()" />
+          <input id="chatInput" placeholder="Send a message (AHP chat/turnStarted)..." onkeydown="if(event.key==='Enter') sendMessage()" />
           <button class="btn" onclick="sendMessage()">Send</button>
         </div>
       </div>
     </section>
 
-    <!-- 2. Automated Workflows View -->
-    <section id="view-workflows" class="view">
+    <!-- 2. Automations & Workflows View -->
+    <section id="view-automations" class="view">
       <div class="split-view">
         <div class="pane">
-          <h3 style="margin:0;">Trigger Automated Workflow</h3>
+          <h3 style="margin:0;">Trigger Automation</h3>
           <div>
-            <label>Persona</label>
-            <select id="wfPersonaSelect" onchange="onWfPersonaChange()"></select>
+            <label>Automation (from ahp-automations://)</label>
+            <select id="autoSelect" onchange="onAutomationChange()"></select>
           </div>
           <div>
-            <label>Workflow Template (from persona)</label>
-            <select id="wfTemplateSelect" onchange="onWfTemplateChange()">
-              <option value="">— Custom workflow —</option>
-            </select>
-          </div>
-          <div>
-            <label>Workflow Name</label>
-            <input id="wfNameInput" value="webhook-job" oninput="updateCurlPreview()" />
-          </div>
-          <div>
-            <label>Prompt / Task Instruction</label>
-            <textarea id="wfPromptInput" rows="4" placeholder="Analyze incoming event payload..." oninput="updateCurlPreview()">Summarize the incoming alert payload and run diagnostic checks.</textarea>
+            <label>Prompt / Template</label>
+            <textarea id="autoPromptInput" rows="4" placeholder="Instruction prompt..."></textarea>
           </div>
           <div>
             <label>Input Payload (JSON)</label>
-            <textarea id="wfPayloadInput" rows="3" oninput="updateCurlPreview()">{"service": "payments-api", "severity": "warning"}</textarea>
+            <textarea id="autoPayloadInput" rows="4" style="font-family:monospace;font-size:0.8rem;" placeholder='{"alert_id": "123", "severity": "high"}' oninput="updateCurlPreview()"></textarea>
           </div>
-          <div style="display:flex;gap:0.5rem;">
-            <button class="btn" onclick="triggerWorkflow(false)">Run Synchronously</button>
-            <button class="btn secondary" onclick="triggerWorkflow(true)">Trigger Async</button>
-          </div>
-          <div>
-            <label>External Server Webhook cURL</label>
-            <pre id="curlPreview"></pre>
-          </div>
+          <button class="btn" onclick="triggerSelectedAutomation()">Run Automation (runAutomation)</button>
+          
+          <hr style="border-color: var(--border); width: 100%; margin: 1rem 0;" />
+          <h4 style="margin:0;">External Webhook Trigger</h4>
+          <p style="font-size:0.8rem;color:var(--muted);margin:0.2rem 0;">External servers can trigger this automation via standard HTTP POST webhook:</p>
+          <pre id="curlPreview" style="white-space:pre-wrap;"></pre>
         </div>
-        <div class="pane" style="border-right:none;">
-          <div style="display:flex;justify-content:space-between;align-items:center;">
-            <h3 style="margin:0;">Workflow Run History</h3>
-            <button class="btn secondary" onclick="loadWorkflowRuns()">Refresh</button>
-          </div>
-          <div id="workflowRunsList" style="display:flex;flex-direction:column;gap:0.75rem;"></div>
+        <div class="pane" style="flex:1;">
+          <h3 style="margin:0;">Automation Runs History</h3>
+          <div id="automationRunsList" style="display:flex;flex-direction:column;gap:0.75rem;"></div>
         </div>
       </div>
     </section>
 
-    <!-- 3. Personas View -->
-    <section id="view-personas" class="view">
-      <div id="personasGrid" class="grid-view"></div>
+    <!-- 3. Agents / Personas Inspector View -->
+    <section id="view-agents" class="view">
+      <div id="agentsGrid" class="grid-view"></div>
     </section>
   </main>
 
   <script>
-    let personas = [];
-    let currentSessionId = null;
+    // ─── AHP WebSocket Client ──────────────────────────────────────────────
+    class AhpClient {
+      constructor(url) {
+        this.url = url;
+        this.ws = null;
+        this.nextId = 1;
+        this.pendingRequests = new Map();
+        this.subscriptions = new Set();
+        this.onActionCallbacks = [];
+        this.onNotificationCallbacks = [];
+        this.isConnected = false;
+        this.serverSeq = 0;
+      }
 
-    function apiFetch(url, opts = {}) {
-      const headers = Object.assign({ 'X-AHP-UI': '1' }, opts.headers || {});
-      return fetch(url, Object.assign({}, opts, { headers }));
+      connect() {
+        const statusBadge = document.getElementById('wsStatusBadge');
+        statusBadge.textContent = 'Connecting...';
+        statusBadge.className = 'badge warn';
+
+        try {
+          this.ws = new WebSocket(this.url);
+        } catch (e) {
+          statusBadge.textContent = 'Error';
+          statusBadge.className = 'badge err';
+          return;
+        }
+
+        this.ws.onopen = async () => {
+          this.isConnected = true;
+          statusBadge.textContent = 'Connected (AHP)';
+          statusBadge.className = 'badge ok';
+          await this.initialize();
+        };
+
+        this.ws.onclose = () => {
+          this.isConnected = false;
+          statusBadge.textContent = 'Disconnected';
+          statusBadge.className = 'badge err';
+          setTimeout(() => this.connect(), 3000);
+        };
+
+        this.ws.onerror = () => {
+          statusBadge.textContent = 'Error';
+          statusBadge.className = 'badge err';
+        };
+
+        this.ws.onmessage = (event) => {
+          try {
+            const msg = JSON.parse(event.data);
+            this.handleMessage(msg);
+          } catch (e) {
+            console.error('Failed to parse incoming JSON-RPC:', e);
+          }
+        };
+      }
+
+      call(method, params = {}) {
+        return new Promise((resolve, reject) => {
+          const id = this.nextId++;
+          this.pendingRequests.set(id, { resolve, reject });
+          const req = {
+            jsonrpc: '2.0',
+            id: id,
+            method: method,
+            params: params
+          };
+          this.ws.send(JSON.stringify(req));
+        });
+      }
+
+      notify(method, params = {}) {
+        const notif = {
+          jsonrpc: '2.0',
+          method: method,
+          params: params
+        };
+        this.ws.send(JSON.stringify(notif));
+      }
+
+      handleMessage(msg) {
+        if (msg.id !== undefined && this.pendingRequests.has(msg.id)) {
+          const { resolve, reject } = this.pendingRequests.get(msg.id);
+          this.pendingRequests.delete(msg.id);
+          if (msg.error) {
+            reject(msg.error);
+          } else {
+            resolve(msg.result);
+          }
+          return;
+        }
+
+        // Notification handling
+        if (msg.method === 'action') {
+          const env = msg.params;
+          if (env && env.serverSeq) {
+            this.serverSeq = Math.max(this.serverSeq, env.serverSeq);
+            document.getElementById('seqBadge').textContent = `seq: ${this.serverSeq}`;
+          }
+          for (const cb of this.onActionCallbacks) {
+            cb(env);
+          }
+        } else if (msg.method) {
+          for (const cb of this.onNotificationCallbacks) {
+            cb(msg.method, msg.params);
+          }
+        }
+      }
+
+      async initialize() {
+        try {
+          const clientId = 'web-ui-' + Math.random().toString(36).substring(2, 9);
+          const initRes = await this.call('initialize', {
+            channel: 'ahp-root://',
+            protocolVersions: ['1.1.0', '1.0.0'],
+            clientId: clientId,
+            initialSubscriptions: ['ahp-root://', 'ahp-automations://']
+          });
+
+          if (initRes.protocolVersion) {
+            document.getElementById('versionBadge').textContent = `AHP ${initRes.protocolVersion}`;
+          }
+          if (initRes.serverSeq) {
+            this.serverSeq = initRes.serverSeq;
+            document.getElementById('seqBadge').textContent = `seq: ${this.serverSeq}`;
+          }
+
+          // Process initial snapshots
+          if (initRes.snapshots) {
+            for (const snap of initRes.snapshots) {
+              if (snap.resource === 'ahp-root://' && snap.state.agents) {
+                renderAgents(snap.state.agents);
+              } else if (snap.resource === 'ahp-automations://' && snap.state.entries) {
+                renderAutomations(snap.state.entries);
+              }
+            }
+          }
+
+          // Fetch sessions catalogue
+          await loadSessions();
+        } catch (err) {
+          console.error('AHP initialization error:', err);
+        }
+      }
+    }
+
+    // ─── Application State ──────────────────────────────────────────────────
+    let client = null;
+    let agents = [];
+    let automations = [];
+    let sessions = [];
+    let currentSessionId = null;
+    let currentChatUri = null;
+    let activeTurnId = null;
+    let currentAssistantPartId = null;
+
+    // Connect WebSocket
+    function initClient() {
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${proto}//${location.host}/ahp`;
+      client = new AhpClient(wsUrl);
+
+      client.onNotificationCallbacks.push((method, params) => {
+        if (method === 'root/sessionAdded') {
+          loadSessions();
+        } else if (method === 'root/sessionRemoved') {
+          if (params.session === `ahp-session:/${currentSessionId}`) {
+            currentSessionId = null;
+            currentChatUri = null;
+            renderChatEmpty();
+          }
+          loadSessions();
+        } else if (method === 'root/sessionSummaryChanged') {
+          loadSessions();
+        }
+      });
+
+      client.onActionCallbacks.push((env) => {
+        // Handle chat streaming actions
+        if (currentChatUri && env.channel === currentChatUri) {
+          handleChatAction(env.action);
+        }
+        // Handle automation catalogue updates
+        if (env.channel === 'ahp-automations://') {
+          client.call('subscribe', { channel: 'ahp-automations://' }).then(res => {
+            if (res.snapshot && res.snapshot.state.entries) {
+              renderAutomations(res.snapshot.state.entries);
+            }
+          });
+        }
+      });
+
+      client.connect();
     }
 
     function switchTab(name, btn) {
       document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
       document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-      document.getElementById('view-' + name).classList.add('active');
+      document.getElementById(`view-${name}`).classList.add('active');
       btn.classList.add('active');
-      if (name === 'workflows') {
+      if (name === 'automations') {
         updateCurlPreview();
         loadWorkflowRuns();
       }
     }
 
-    async function fetchPersonas() {
-      const res = await apiFetch('/api/v1/personas');
-      const data = await res.json();
-      personas = data.personas || [];
-      document.getElementById('personaCount').textContent = personas.length;
-      const st = data.status || {};
-      const rev = st.git_revision ? ` | git: ${st.git_revision}` : '';
-      const scanBadge = document.getElementById('scanBadge');
-      scanBadge.textContent = `Dir: ${st.directory || './personas'} (every ${st.scan_interval || '30s'}${rev})`;
-      scanBadge.className = (st.scan_errors && st.scan_errors.length) ? 'badge warn' : 'badge ok';
+    function renderAgents(agentList) {
+      agents = agentList || [];
+      document.getElementById('agentCount').textContent = agents.length;
 
       const sel1 = document.getElementById('sessionPersonaSelect');
-      const sel2 = document.getElementById('wfPersonaSelect');
       sel1.innerHTML = '';
-      sel2.innerHTML = '';
-      personas.forEach(p => {
-        sel1.innerHTML += `<option value="${p.id}">${p.name} (${p.id})</option>`;
-        sel2.innerHTML += `<option value="${p.id}">${p.name} (${p.id})</option>`;
+      agents.forEach(a => {
+        sel1.innerHTML += `<option value="${a.provider}">${a.displayName} (${a.provider})</option>`;
       });
 
-      onWfPersonaChange();
-      renderPersonasGrid();
-      updateCurlPreview();
-    }
-
-    function onWfPersonaChange() {
-      const personaId = document.getElementById('wfPersonaSelect').value;
-      const p = personas.find(item => item.id === personaId);
-      const tplSel = document.getElementById('wfTemplateSelect');
-      tplSel.innerHTML = '<option value="">— Custom workflow —</option>';
-      if (p && p.workflows && p.workflows.length) {
-        p.workflows.forEach(wf => {
-          tplSel.innerHTML += `<option value="${escapeHtml(wf.name)}">${escapeHtml(wf.name)}</option>`;
-        });
-        tplSel.value = p.workflows[0].name;
-        onWfTemplateChange();
-      } else {
-        updateCurlPreview();
-      }
-    }
-
-    function onWfTemplateChange() {
-      const personaId = document.getElementById('wfPersonaSelect').value;
-      const tplName = document.getElementById('wfTemplateSelect').value;
-      const p = personas.find(item => item.id === personaId);
-      if (p && p.workflows && tplName) {
-        const wf = p.workflows.find(w => w.name === tplName);
-        if (wf) {
-          document.getElementById('wfNameInput').value = wf.name;
-          if (wf.prompt_template) {
-            document.getElementById('wfPromptInput').value = wf.prompt_template.trim();
-          }
-        }
-      }
-      updateCurlPreview();
-    }
-
-    function renderPersonasGrid() {
-      const grid = document.getElementById('personasGrid');
-      if (!personas.length) {
-        grid.innerHTML = `<div class="card"><h3>No personas found</h3><p style="color:var(--muted)">Add a subfolder with <code>config.yaml</code> and <code>prompt.md</code> inside your personas folder.</p></div>`;
+      const grid = document.getElementById('agentsGrid');
+      if (!agents.length) {
+        grid.innerHTML = `<div class="card"><h3>No agents discovered</h3><p style="color:var(--muted)">Ensure your personas directory contains valid agent definitions.</p></div>`;
         return;
       }
-      grid.innerHTML = personas.map(p => {
-        const skillsHtml = (p.skills || []).map(s => `<span class="badge ok">${escapeHtml(s.name)}</span>`).join(' ') || '<span class="badge">none</span>';
-        const workflowsHtml = (p.workflows || []).map(w => `<span class="badge">${escapeHtml(w.name)}</span>`).join(' ') || '<span class="badge">none</span>';
-        const mcpHtml = (p.mcp_servers || []).map(m => `<div style="font-size:0.8rem;">• <b>${escapeHtml(m.name)}</b>: <code>${escapeHtml(m.url)}</code> <span class="badge ${m.token_resolved ? 'ok' : ''}">${escapeHtml(m.token_key || 'no-auth')}</span></div>`).join('') || '<div style="font-size:0.8rem;color:var(--muted)">None configured</div>';
+
+      grid.innerHTML = agents.map(a => {
+        const skills = (a.customizations || []).filter(c => c.type === 'plugin' || c.type === 'skill');
+        const skillsHtml = skills.map(s => {
+          if (s.children) {
+            return s.children.map(ch => `<span class="badge ok">${escapeHtml(ch.name)}</span>`).join(' ');
+          }
+          return `<span class="badge ok">${escapeHtml(s.name)}</span>`;
+        }).join(' ') || '<span class="badge">none</span>';
+
+        const mcps = (a.customizations || []).filter(c => c.type === 'mcpServer');
+        const mcpHtml = mcps.map(m => `<div style="font-size:0.8rem;">• <b>${escapeHtml(m.name)}</b>: <code>${escapeHtml(m.uri)}</code></div>`).join('') || '<div style="font-size:0.8rem;color:var(--muted)">None configured</div>';
+
+        const modelStr = a.models && a.models.length ? a.models[0].name : 'default';
+
         return `
           <div class="card">
             <div style="display:flex;justify-content:space-between;align-items:center;">
-              <h3>${escapeHtml(p.name)}</h3>
-              <span class="badge">${escapeHtml(p.id)}</span>
+              <h3>${escapeHtml(a.displayName)}</h3>
+              <span class="badge">${escapeHtml(a.provider)}</span>
             </div>
-            <div style="font-size:0.85rem;color:var(--muted);">${escapeHtml(p.description || '')}</div>
+            <div style="font-size:0.85rem;color:var(--muted);">${escapeHtml(a.description || '')}</div>
             <div>
-              <label>LLM Endpoint & Model</label>
-              <div style="font-size:0.82rem;"><code>${escapeHtml(p.llm.endpoint)}</code> — <b>${escapeHtml(p.llm.model)}</b></div>
-              <div style="font-size:0.78rem;margin-top:0.2rem;">Token key: <code>${escapeHtml(p.llm.token_key || 'none')}</code>
-                <span class="badge ${p.llm_token_resolved ? 'ok' : 'warn'}">${p.llm_token_resolved ? 'resolved' : 'missing/unset'}</span>
-              </div>
+              <label>Model</label>
+              <div style="font-size:0.82rem;"><b>${escapeHtml(modelStr)}</b></div>
             </div>
             <div>
               <label>MCP Servers</label>
               ${mcpHtml}
             </div>
             <div>
-              <label>Skills</label>
+              <label>Skills / Plugins</label>
               <div style="display:flex;gap:0.35rem;flex-wrap:wrap;">${skillsHtml}</div>
-            </div>
-            <div>
-              <label>Workflows</label>
-              <div style="display:flex;gap:0.35rem;flex-wrap:wrap;">${workflowsHtml}</div>
-            </div>
-            <div>
-              <label>Base Instructions</label>
-              <pre>${escapeHtml(p.instructions || '')}</pre>
             </div>
           </div>
         `;
       }).join('');
     }
 
-    async function reloadPersonas() {
-      await apiFetch('/api/v1/personas/reload', { method: 'POST' });
-      await fetchPersonas();
+    function renderAutomations(entries) {
+      automations = entries || [];
+      const sel = document.getElementById('autoSelect');
+      sel.innerHTML = '';
+      automations.forEach(e => {
+        sel.innerHTML += `<option value="${escapeHtml(e.resource)}">${escapeHtml(e.definition.title || e.resource)}</option>`;
+      });
+      onAutomationChange();
+    }
+
+    function onAutomationChange() {
+      const uri = document.getElementById('autoSelect').value;
+      const entry = automations.find(e => e.resource === uri);
+      if (entry) {
+        document.getElementById('autoPromptInput').value = entry.definition.message ? entry.definition.message.text : '';
+      }
+      updateCurlPreview();
+    }
+
+    function updateCurlPreview() {
+      const uri = document.getElementById('autoSelect').value || 'ahp-automation:/alert-triage';
+      const shortId = uri.replace('ahp-automation:/', '');
+      let inputObj = {};
+      try { inputObj = JSON.parse(document.getElementById('autoPayloadInput').value || '{}'); } catch (_) {}
+      const body = JSON.stringify(inputObj, null, 2);
+      document.getElementById('curlPreview').textContent =
+        `curl -X POST ${location.origin}/webhook/${shortId} \\\n  -H "Content-Type: application/json" \\\n  -d '${body}'`;
+    }
+
+    async function triggerSelectedAutomation() {
+      const uri = document.getElementById('autoSelect').value;
+      if (!uri) return;
+      let payload = {};
+      try { payload = JSON.parse(document.getElementById('autoPayloadInput').value || '{}'); } catch (_) {}
+
+      try {
+        const res = await client.call('runAutomation', {
+          channel: 'ahp-automations://',
+          automation: uri,
+          requestId: 'req-' + Math.random().toString(36).substring(2, 9)
+        });
+        await loadWorkflowRuns();
+      } catch (err) {
+        alert('Failed to run automation: ' + (err.message || JSON.stringify(err)));
+      }
     }
 
     async function loadSessions() {
-      const res = await apiFetch('/api/v1/sessions');
-      const data = await res.json();
-      const list = document.getElementById('sessionList');
-      const items = data.sessions || [];
-      list.innerHTML = items.map(s => `
-        <div class="session-item ${s.id === currentSessionId ? 'active' : ''}" onclick="selectSession('${s.id}')">
-          <div style="width:100%;">
-            <div style="display:flex;justify-content:space-between;align-items:center;gap:0.4rem;">
-              <div style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(s.title || s.id.slice(0,8))}</div>
-              <span class="badge" style="font-size:0.7rem;">${escapeHtml(s.persona_id)}</span>
+      try {
+        const res = await client.call('listSessions', { channel: 'ahp-root://' });
+        sessions = res.items || [];
+        const list = document.getElementById('sessionList');
+        list.innerHTML = sessions.map(s => {
+          const sid = s.resource.replace('ahp-session:/', '');
+          const isSelected = sid === currentSessionId;
+          return `
+            <div class="session-item ${isSelected ? 'active' : ''}" onclick="selectSession('${sid}')">
+              <div style="width:100%;">
+                <div style="display:flex;justify-content:space-between;align-items:center;gap:0.4rem;">
+                  <div style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(s.title || sid.slice(0,8))}</div>
+                  <span class="badge" style="font-size:0.7rem;">${escapeHtml(s.provider)}</span>
+                </div>
+                <div style="font-size:0.73rem;color:var(--muted);margin-top:0.2rem;">${formatDateTime(s.modifiedAt || s.createdAt)}</div>
+              </div>
             </div>
-            <div style="font-size:0.73rem;color:var(--muted);margin-top:0.2rem;">${formatDateTime(s.updated_at || s.created_at)}</div>
-          </div>
-        </div>
-      `).join('');
+          `;
+        }).join('');
+      } catch (e) {
+        console.error('loadSessions failed:', e);
+      }
     }
 
     async function createNewSession() {
-      const personaId = document.getElementById('sessionPersonaSelect').value;
+      const provider = document.getElementById('sessionPersonaSelect').value;
       const title = document.getElementById('sessionTitleInput').value.trim();
-      if (!personaId) return;
-      const res = await apiFetch('/api/v1/sessions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ persona_id: personaId, title })
-      });
-      const sess = await res.json();
-      document.getElementById('sessionTitleInput').value = '';
-      currentSessionId = sess.id;
-      await loadSessions();
-      await selectSession(sess.id);
+      const sessionId = crypto.randomUUID();
+      const sessionUri = `ahp-session:/${sessionId}`;
+
+      try {
+        await client.call('createSession', {
+          channel: sessionUri,
+          provider: provider
+        });
+        document.getElementById('sessionTitleInput').value = '';
+        currentSessionId = sessionId;
+        await selectSession(sessionId);
+      } catch (err) {
+        alert('Failed to create session: ' + (err.message || JSON.stringify(err)));
+      }
     }
 
-    async function selectSession(id) {
-      currentSessionId = id;
+    async function selectSession(sessionId) {
+      currentSessionId = sessionId;
+      const sessionUri = `ahp-session:/${sessionId}`;
+      document.getElementById('activeSessionTitle').textContent = `Session ${sessionId.slice(0, 8)}`;
+      document.getElementById('activeSessionUri').textContent = sessionUri;
+      document.getElementById('disposeSessionBtn').style.display = 'inline-block';
+
       await loadSessions();
-      const res = await apiFetch(`/api/v1/sessions/${id}`);
-      const sess = await res.json();
-      renderMessages(sess.messages || []);
+
+      try {
+        const res = await client.call('subscribe', { channel: sessionUri });
+        const snap = res.snapshot;
+        if (snap && snap.state && snap.state.session) {
+          const sess = snap.state.session;
+          document.getElementById('activeSessionTitle').textContent = sess.title || sessionId.slice(0, 8);
+          if (sess.defaultChat) {
+            currentChatUri = sess.defaultChat;
+            await selectChat(sess.defaultChat);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to subscribe to session:', err);
+      }
     }
 
-    function renderMessages(messages) {
+    async function selectChat(chatUri) {
+      currentChatUri = chatUri;
+      try {
+        const res = await client.call('subscribe', { channel: chatUri });
+        const snap = res.snapshot;
+        if (snap && snap.state && snap.state.chat) {
+          renderChatState(snap.state.chat);
+        }
+      } catch (err) {
+        console.error('Failed to subscribe to chat:', err);
+      }
+    }
+
+    async function disposeCurrentSession() {
+      if (!currentSessionId) return;
+      if (!confirm('Are you sure you want to dispose this session?')) return;
+      const sessionUri = `ahp-session:/${currentSessionId}`;
+      try {
+        await client.call('disposeSession', { channel: sessionUri });
+      } catch (err) {
+        console.error('Failed to dispose session:', err);
+      }
+    }
+
+    function renderChatEmpty() {
+      document.getElementById('activeSessionTitle').textContent = 'No session selected';
+      document.getElementById('activeSessionUri').textContent = '';
+      document.getElementById('disposeSessionBtn').style.display = 'none';
+      document.getElementById('chatMessages').innerHTML = `<div style="color:var(--muted);margin:auto;">Select or create a session to begin chatting over standard AHP WebSocket.</div>`;
+    }
+
+    function renderChatState(chatState) {
       const box = document.getElementById('chatMessages');
-      if (!messages.length) {
-        box.innerHTML = `<div style="color:var(--muted);margin:auto;">Session created. Send a message below!</div>`;
+      box.innerHTML = '';
+      if (!chatState.turns || !chatState.turns.length) {
+        box.innerHTML = `<div style="color:var(--muted);margin:auto;">Session ready. Send a message below!</div>`;
         return;
       }
-      box.innerHTML = messages.map(m => {
-        const tsHtml = m.created_at ? `<div style="font-size:0.7rem;opacity:0.7;margin-bottom:0.25rem;">${formatDateTime(m.created_at)}</div>` : '';
-        if (m.role === 'tool') {
-          return `<div class="msg tool">${tsHtml}Tool Result (${m.tool_call_id}):\n${escapeHtml(m.content)}</div>`;
+
+      chatState.turns.forEach(t => {
+        // User message
+        if (t.message) {
+          const userTime = t.startedAt ? `<div style="font-size:0.7rem;opacity:0.7;margin-bottom:0.25rem;">${formatDateTime(t.startedAt)}</div>` : '';
+          box.innerHTML += `<div class="msg user">${userTime}${escapeHtml(t.message.text)}</div>`;
         }
-        let tcInfo = '';
-        if (m.tool_calls && m.tool_calls.length) {
-          tcInfo = m.tool_calls.map(tc => `<div>⚡ Tool Call: <b>${escapeHtml(tc.function.name)}</b>(${escapeHtml(tc.function.arguments)})</div>`).join('');
-        }
-        return `<div class="msg ${m.role}">${tsHtml}${tcInfo}${escapeHtml(m.content || '')}</div>`;
-      }).join('');
+        // Response parts
+        (t.responseParts || []).forEach(p => {
+          if (p.kind === 'markdown') {
+            box.innerHTML += `<div class="msg assistant">${escapeHtml(p.content)}</div>`;
+          } else if (p.kind === 'toolCall' && p.toolCall) {
+            const tc = p.toolCall;
+            const past = tc.pastTenseMessage ? (tc.pastTenseMessage.plain || '') : `Executed ${tc.toolName}`;
+            box.innerHTML += `<div class="msg tool">⚡ Tool: <b>${escapeHtml(tc.displayName || tc.toolName)}</b>\n${escapeHtml(past)}</div>`;
+          }
+        });
+      });
       box.scrollTop = box.scrollHeight;
+    }
+
+    function handleChatAction(action) {
+      const box = document.getElementById('chatMessages');
+      const statusEl = document.getElementById('chatStatus');
+
+      switch (action.type) {
+        case 'chat/turnStarted':
+          activeTurnId = action.turnId;
+          statusEl.textContent = 'Agent thinking...';
+          break;
+        case 'chat/responsePart':
+          if (action.part && action.part.kind === 'markdown') {
+            currentAssistantPartId = action.part.id;
+            const newMsg = document.createElement('div');
+            newMsg.className = 'msg assistant';
+            newMsg.id = `part-${currentAssistantPartId}`;
+            box.appendChild(newMsg);
+            box.scrollTop = box.scrollHeight;
+          }
+          break;
+        case 'chat/delta':
+          if (action.partId && action.content) {
+            let el = document.getElementById(`part-${action.partId}`);
+            if (!el) {
+              el = document.createElement('div');
+              el.className = 'msg assistant';
+              el.id = `part-${action.partId}`;
+              box.appendChild(el);
+            }
+            el.textContent += action.content;
+            box.scrollTop = box.scrollHeight;
+          }
+          break;
+        case 'chat/toolCallStart':
+          statusEl.textContent = `Running tool ${action.displayName || action.toolName}...`;
+          break;
+        case 'chat/toolCallComplete':
+          const toolEl = document.createElement('div');
+          toolEl.className = 'msg tool';
+          const toolName = action.toolCallId || 'tool';
+          const out = action.result && action.result.content && action.result.content[0] ? action.result.content[0].text : 'Done';
+          toolEl.textContent = `⚡ Tool (${toolName}):\n${out}`;
+          box.appendChild(toolEl);
+          box.scrollTop = box.scrollHeight;
+          break;
+        case 'chat/turnComplete':
+          statusEl.textContent = '';
+          activeTurnId = null;
+          break;
+        case 'chat/error':
+          statusEl.textContent = `Error: ${action.part ? action.part.error.message : 'Turn failed'}`;
+          activeTurnId = null;
+          break;
+      }
     }
 
     async function sendMessage() {
       const input = document.getElementById('chatInput');
-      const content = input.value.trim();
-      if (!content) return;
-      if (!currentSessionId) {
+      const text = input.value.trim();
+      if (!text) return;
+      if (!currentSessionId || !currentChatUri) {
         await createNewSession();
       }
       input.value = '';
+
       const box = document.getElementById('chatMessages');
       const nowIso = new Date().toISOString();
-      box.innerHTML += `<div class="msg user"><div style="font-size:0.7rem;opacity:0.7;margin-bottom:0.25rem;">${formatDateTime(nowIso)}</div>${escapeHtml(content)}</div>`;
+      box.innerHTML += `<div class="msg user"><div style="font-size:0.7rem;opacity:0.7;margin-bottom:0.25rem;">${formatDateTime(nowIso)}</div>${escapeHtml(text)}</div>`;
       box.scrollTop = box.scrollHeight;
 
-      const statusEl = document.getElementById('chatStatus');
-      statusEl.textContent = 'Agent thinking...';
-
-      const res = await apiFetch(`/api/v1/sessions/${currentSessionId}/messages?stream=true`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
-        body: JSON.stringify({ content })
-      });
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = '';
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        const lines = buf.split('\n');
-        buf = lines.pop();
-        for (const line of lines) {
-          if (line.startsWith('data:')) {
-            try {
-              const ev = JSON.parse(line.slice(5).trim());
-              if (ev.type === 'status') statusEl.textContent = ev.content;
-              if (ev.type === 'tool_call') statusEl.textContent = `Calling tool ${ev.name}...`;
-              if (ev.type === 'error') statusEl.textContent = `Error: ${ev.content}`;
-            } catch (_) {}
+      const turnId = 'turn-' + Math.random().toString(36).substring(2, 9);
+      client.notify('dispatchAction', {
+        channel: currentChatUri,
+        clientSeq: 1,
+        action: {
+          type: 'chat/turnStarted',
+          turnId: turnId,
+          startedAt: nowIso,
+          message: {
+            text: text,
+            origin: { kind: 'user' }
           }
         }
-      }
-      statusEl.textContent = '';
-      await selectSession(currentSessionId);
-    }
-
-    function updateCurlPreview() {
-      const personaId = document.getElementById('wfPersonaSelect').value || 'default-assistant';
-      const wfName = document.getElementById('wfNameInput').value || 'webhook-job';
-      const prompt = document.getElementById('wfPromptInput').value || '';
-      let inputObj = {};
-      try { inputObj = JSON.parse(document.getElementById('wfPayloadInput').value || '{}'); } catch (_) {}
-      const body = JSON.stringify({
-        persona_id: personaId,
-        workflow_name: wfName,
-        prompt: prompt,
-        input: inputObj,
-        async: true
-      }, null, 2);
-      document.getElementById('curlPreview').textContent =
-        `curl -X POST ${location.origin}/api/v1/workflows/trigger \\\n  -H "Content-Type: application/json" \\\n  -d '${body}'`;
-    }
-
-    async function triggerWorkflow(asyncMode) {
-      const personaId = document.getElementById('wfPersonaSelect').value;
-      const wfName = document.getElementById('wfNameInput').value;
-      const prompt = document.getElementById('wfPromptInput').value;
-      let inputObj = {};
-      try { inputObj = JSON.parse(document.getElementById('wfPayloadInput').value || '{}'); } catch (_) {}
-      await apiFetch('/api/v1/workflows/trigger', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          persona_id: personaId,
-          workflow_name: wfName,
-          prompt: prompt,
-          input: inputObj,
-          async: asyncMode
-        })
       });
-      await loadWorkflowRuns();
+    }
+
+    async function reloadPersonas() {
+      try {
+        const res = await fetch('/api/v1/personas/reload', { method: 'POST' });
+        const data = await res.json();
+        // Root agents snapshot will be received or can be re-fetched
+        const snapRes = await client.call('subscribe', { channel: 'ahp-root://' });
+        if (snapRes.snapshot && snapRes.snapshot.state.agents) {
+          renderAgents(snapRes.snapshot.state.agents);
+        }
+      } catch (err) {
+        console.error('Reload failed:', err);
+      }
     }
 
     async function loadWorkflowRuns() {
-      const res = await apiFetch('/api/v1/workflows/runs');
-      const data = await res.json();
-      const runs = data.runs || [];
-      const container = document.getElementById('workflowRunsList');
-      if (!runs.length) {
-        container.innerHTML = `<div style="color:var(--muted);">No workflow runs triggered yet.</div>`;
-        return;
-      }
-      container.innerHTML = runs.map(r => {
-        const badgeClass = r.status === 'completed' ? 'ok' : (r.status === 'failed' ? 'err' : 'warn');
-        const execTime = formatDateTime(r.started_at || r.created_at);
-        const dur = formatDuration(r.started_at || r.created_at, r.completed_at);
-        const durBadge = dur ? ` <span class="badge">${dur}</span>` : '';
-        const stepsHtml = (r.steps || []).map(st => {
-          const stTime = st.timestamp ? `<span style="opacity:0.7;">${formatTimeOnly(st.timestamp)}</span> ` : '';
-          return `<div style="font-size:0.78rem;color:var(--muted);">${stTime}[${st.type}] <b>${escapeHtml(st.name || '')}</b> ${escapeHtml(st.output || st.input || '')}</div>`;
-        }).join('');
-        return `
-          <div class="card">
-            <div style="display:flex;justify-content:space-between;align-items:center;">
-              <div><b>${escapeHtml(r.workflow_name || 'workflow')}</b> <span class="badge">${escapeHtml(r.persona_id)}</span>${durBadge}</div>
-              <span class="badge ${badgeClass}">${escapeHtml(r.status)}</span>
+      try {
+        const res = await fetch('/api/v1/workflows/runs');
+        const data = await res.json();
+        const runs = data.runs || [];
+        const container = document.getElementById('automationRunsList');
+        if (!runs.length) {
+          container.innerHTML = `<div style="color:var(--muted);">No automation runs recorded yet.</div>`;
+          return;
+        }
+        container.innerHTML = runs.map(r => {
+          const badgeClass = r.status === 'completed' ? 'ok' : (r.status === 'failed' ? 'err' : 'warn');
+          const execTime = formatDateTime(r.started_at || r.created_at);
+          const dur = formatDuration(r.started_at || r.created_at, r.completed_at);
+          const durBadge = dur ? ` <span class="badge">${dur}</span>` : '';
+          const stepsHtml = (r.steps || []).map(st => {
+            const stTime = st.timestamp ? `<span style="opacity:0.7;">${formatTimeOnly(st.timestamp)}</span> ` : '';
+            return `<div style="font-size:0.78rem;color:var(--muted);">${stTime}[${st.type}] <b>${escapeHtml(st.name || '')}</b> ${escapeHtml(st.output || st.input || '')}</div>`;
+          }).join('');
+          return `
+            <div class="card">
+              <div style="display:flex;justify-content:space-between;align-items:center;">
+                <div><b>${escapeHtml(r.workflow_name || 'automation')}</b> <span class="badge">${escapeHtml(r.persona_id)}</span>${durBadge}</div>
+                <span class="badge ${badgeClass}">${escapeHtml(r.status)}</span>
+              </div>
+              <div style="font-size:0.76rem;color:var(--muted);">Run URI: <code>ahp-automation-run:/${escapeHtml(r.id)}</code> | ${execTime}</div>
+              <div style="font-size:0.82rem;color:var(--muted);">Prompt: ${escapeHtml(r.prompt)}</div>
+              ${stepsHtml ? `<div><label>Execution Steps</label>${stepsHtml}</div>` : ''}
+              ${r.output ? `<div><label>Output</label><pre>${escapeHtml(r.output)}</pre></div>` : ''}
+              ${r.error ? `<div style="color:#f87171;font-size:0.82rem;">Error: ${escapeHtml(r.error)}</div>` : ''}
             </div>
-            <div style="font-size:0.76rem;color:var(--muted);">Executed: ${execTime}${r.completed_at ? ` → ${formatTimeOnly(r.completed_at)}` : ''}</div>
-            <div style="font-size:0.82rem;color:var(--muted);">Prompt: ${escapeHtml(r.prompt)}</div>
-            ${stepsHtml ? `<div><label>Execution Steps</label>${stepsHtml}</div>` : ''}
-            ${r.output ? `<div><label>Output</label><pre>${escapeHtml(r.output)}</pre></div>` : ''}
-            ${r.error ? `<div style="color:#f87171;font-size:0.82rem;">Error: ${escapeHtml(r.error)}</div>` : ''}
-          </div>
-        `;
-      }).join('');
+          `;
+        }).join('');
+      } catch (e) {
+        console.error('loadWorkflowRuns failed:', e);
+      }
     }
 
     function formatDateTime(iso) {
@@ -677,8 +940,8 @@
       return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     }
 
-    fetchPersonas().then(loadSessions);
+    // Start AHP WebSocket client on page load
+    window.addEventListener('DOMContentLoaded', initClient);
   </script>
 </body>
 </html>
-

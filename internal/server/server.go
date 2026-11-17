@@ -10,11 +10,11 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
 	"github.com/balazsgrill/ahomepserver/internal/agent"
+	"github.com/balazsgrill/ahomepserver/internal/ahp"
 	"github.com/balazsgrill/ahomepserver/internal/config"
 	"github.com/balazsgrill/ahomepserver/internal/persona"
 	"github.com/balazsgrill/ahomepserver/internal/store"
@@ -24,13 +24,14 @@ import (
 //go:embed ui/*
 var uiFS embed.FS
 
-// Server exposes the AHP REST API, SSE endpoints, and embedded Web UI.
+// Server exposes the AHP standard WebSocket protocol, REST API, SSE endpoints, and embedded Web UI.
 type Server struct {
 	cfg      *config.Config
 	tokens   *config.TokenResolver
 	personas *persona.Manager
 	store    store.Store
 	runner   *agent.Runner
+	host     *ahp.Host
 	mux      *http.ServeMux
 }
 
@@ -48,10 +49,16 @@ func New(
 		personas: personas,
 		store:    st,
 		runner:   runner,
+		host:     ahp.NewHost(cfg, tokens, personas, st, runner),
 		mux:      http.NewServeMux(),
 	}
 	s.registerRoutes()
 	return s
+}
+
+// Host returns the authoritative AHP Host instance.
+func (s *Server) Host() *ahp.Host {
+	return s.host
 }
 
 // Handler returns the root http.Handler with optional API key protection.
@@ -60,8 +67,16 @@ func (s *Server) Handler() http.Handler {
 }
 
 func (s *Server) registerRoutes() {
-	// Health
+	// Health & status
 	s.mux.HandleFunc("GET /healthz", s.handleHealth)
+
+	// AHP standard WebSocket protocol endpoints
+	wsHandler := ahp.UpgradeHandler(s.host)
+	s.mux.HandleFunc("GET /ahp", wsHandler)
+	s.mux.HandleFunc("GET /ws", wsHandler)
+
+	// Webhook trigger endpoint for external HTTP callers
+	s.mux.HandleFunc("POST /webhook/{id}", s.handleWebhook)
 
 	// Personas
 	s.mux.HandleFunc("GET /api/v1/personas", s.handleListPersonas)
@@ -80,16 +95,29 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /api/v1/workflows/runs", s.handleListWorkflowRuns)
 	s.mux.HandleFunc("GET /api/v1/workflows/runs/{id}", s.handleGetWorkflowRun)
 
-	// Embedded Web UI
+	// Root endpoint: upgrades to AHP WebSocket if requested, or serves embedded Web UI
 	sub, err := fs.Sub(uiFS, "ui")
+	var fileServer http.Handler
 	if err == nil {
-		s.mux.Handle("GET /", http.FileServer(http.FS(sub)))
+		fileServer = http.FileServer(http.FS(sub))
 	}
+	s.mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+		if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+			wsHandler(w, r)
+			return
+		}
+		if fileServer != nil {
+			fileServer.ServeHTTP(w, r)
+			return
+		}
+		http.NotFound(w, r)
+	})
 }
 
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.cfg.APIKey == "" || !strings.HasPrefix(r.URL.Path, "/api/") {
+		// Health check, static UI, webhooks, and WebSocket upgrades handle their own auth
+		if s.cfg.APIKey == "" || r.URL.Path == "/healthz" || r.URL.Path == "/" || r.URL.Path == "/ahp" || r.URL.Path == "/ws" || strings.HasPrefix(r.URL.Path, "/webhook/") {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -100,7 +128,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 				key = strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
 			}
 		}
-		if key == s.cfg.APIKey || isSameOriginUIRequest(r) {
+		if key == s.cfg.APIKey {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -108,26 +136,53 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-func isSameOriginUIRequest(r *http.Request) bool {
-	if r.Header.Get("Sec-Fetch-Site") == "same-origin" || r.Header.Get("X-AHP-UI") == "1" {
-		return true
-	}
-	if r.Host != "" {
-		for _, hdr := range []string{"Origin", "Referer"} {
-			if raw := r.Header.Get(hdr); raw != "" {
-				if u, err := url.Parse(raw); err == nil && strings.EqualFold(u.Host, r.Host) {
-					return true
-				}
-			}
-		}
-	}
-	return false
-}
-
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"status":  "ok",
-		"monitor": s.personas.Status(),
+		"status":      "ok",
+		"ahp_version": "1.1.0",
+		"server_seq":  s.host.CurrentSeq(),
+		"monitor":     s.personas.Status(),
+	})
+}
+
+func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing webhook/automation id"})
+		return
+	}
+
+	var payload map[string]interface{}
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+	}
+
+	targetURI := id
+	if !strings.HasPrefix(targetURI, "ahp-automation:/") {
+		targetURI = fmt.Sprintf("ahp-automation:/%s", id)
+	}
+
+	runURI, err := s.host.TriggerAutomation(r.Context(), targetURI, payload, "webhook")
+	if err != nil {
+		// Try fallback search by prefix/suffix
+		found := false
+		for _, ent := range s.host.AutoState().Entries {
+			if strings.HasSuffix(ent.Resource, id) || strings.EqualFold(ent.Definition.Title, id) {
+				runURI, err = s.host.TriggerAutomation(r.Context(), ent.Resource, payload, "webhook")
+				found = (err == nil)
+				break
+			}
+		}
+		if !found {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+
+	writeJSON(w, http.StatusAccepted, map[string]interface{}{
+		"status":  "triggered",
+		"run_uri": runURI,
+		"run_id":  strings.TrimPrefix(runURI, "ahp-automation-run:/"),
 	})
 }
 
@@ -187,6 +242,9 @@ func (s *Server) handleGetPersona(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleReloadPersonas(w http.ResponseWriter, _ *http.Request) {
 	changed, err := s.personas.Scan()
+	if changed {
+		s.host.SyncPersonasToRoot()
+	}
 	resp := map[string]interface{}{
 		"changed": changed,
 		"status":  s.personas.Status(),
